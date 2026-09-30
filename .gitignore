@@ -1,0 +1,12 @@
+.venv/
+data_cache/
+al_work*/
+ft_work/
+probe_work/
+results*/
+*_log.txt
+__pycache__/
+*.pyc
+*.model
+*.pt
+.DS_Store
