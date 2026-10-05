@@ -2,9 +2,9 @@
 
 **Active-learning fine-tuning of a machine-learning interatomic potential (MLIP) — the loop NVIDIA's ALCHEMI is built on, reproduced faithfully and honestly on a laptop.**
 
-A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this **cuts worst-case force error by 35–62% versus random selection at equal labeling budget.**
+A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this **cuts worst-case force error by 26–59% versus random selection at equal labeling budget, winning every paired restart at every budget.**
 
-![Active learning halves worst-case force error on out-of-distribution configs at equal labeling budget (6 restarts).](assets/mlip1_money_plot.png)
+![Active learning halves worst-case force error on out-of-distribution configs at equal labeling budget (6 restarts).](assets/mlip1_money_plot_fixed.png)
 
 ---
 
@@ -14,9 +14,28 @@ On a held-out **out-of-distribution** test set (the hard/deployment regime), a 3
 
 | configs labeled | 36 | 48 | 60 | 72 | 84 |
 |:---|---:|---:|---:|---:|---:|
-| worst-case (p90) force error, AL better than random | +35% | +47% | +55% | +52% | **+62%** |
+| worst-case (p90) force error, AL better than random | +26% | +49% | +53% | **+59%** | +50% |
+| restarts where AL wins | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
 
-*Mean over 6 restarts; standard-error bands in the figure.* Alongside: real MACE fine-tuning cut held-out force error **~3×** (1121 → 374 meV/Å, median on physical configs, validation split drawn from train — never test); committee disagreement tracks force error at **Spearman 0.86**.
+Both arms share the seed set, the bootstrap draws and the training seeds, so the
+comparison is **paired** and the 24-label point is identical by construction. Active
+learning wins every one of the 6 paired restarts at every budget — a one-sided sign
+test gives **p = 0.016** at each point, which is a stronger statement than the mean
+and its band. The effect also now shows in the median (+17%, +21%, +21% at the top
+three budgets), not only the tail.
+
+Alongside: real MACE fine-tuning cut held-out force error **~3×** (1121 → 374 meV/Å,
+median on physical configs, validation split drawn from train — never test);
+committee disagreement tracks force error at **Spearman 0.86**.
+
+> **These numbers superseded an earlier run.** The first version of this experiment
+> reported +35–62%. Three defects were later found and fixed — the fine-tuned models
+> were silently losing the foundation's element table, the acquisition score was not
+> rotation-invariant, and best-epoch selection ran on 2–3 validation configurations.
+> Re-running the corrected code moved individual points in both directions (−12% at
+> 84 labels, +8% at 72) and brought the headline range down to +26–59%. The
+> conclusion held and the evidence improved. [`DESIGN.md`](DESIGN.md) records what
+> changed and why.
 
 ## The point most people miss
 

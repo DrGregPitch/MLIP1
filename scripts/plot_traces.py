@@ -30,6 +30,17 @@ def main():
     print(f"merged campaigns: {n}")
     grid = merged["random"][0]["n_labeled"]
 
+    # every campaign must share the budget grid. A campaign that ended early via the
+    # `not remaining` branch has a shorter trace, and np.array over ragged rows gives
+    # an object array that silently mislabels the x-axis rather than failing.
+    for k, campaigns in merged.items():
+        for i, c in enumerate(campaigns):
+            if c["n_labeled"] != grid:
+                raise SystemExit(
+                    f"{k} campaign {i} has budget grid {c['n_labeled']}, expected {grid}; "
+                    "traces from different budget settings cannot be merged"
+                )
+
     print("\nmean p90 (worst-case) force error, meV/A:")
     R = np.array([c["p90_rmse"] for c in merged["random"]])
     U = np.array([c["p90_rmse"] for c in merged["uncertainty"]])

@@ -132,9 +132,60 @@ deployment/OOD regime, not an i.i.d. test where random is near-optimal; (3) the
 worst-case metric (MD stability = no rare large errors), not average MAE. Get any wrong
 and random ties or wins. That is exactly what NVIDIA/ALCHEMI exploits.
 
-Caveats (honest): MACE-large stands in for DFT; 2 restarts so bands are noisy;
-stand-in Delta could be swapped for a real GPU-DFT oracle. The loop structure is
-production-identical.
+Caveats (honest): MACE-large stands in for DFT; 6 restarts; stand-in Delta could be
+swapped for a real GPU-DFT oracle. The loop structure is production-identical.
+
+## CORRECTION (measured): three defects in the run above; result survives, numbers move
+
+The +35-62% above was produced by code carrying three bugs. All three are fixed and
+the experiment was re-run from scratch on the same pool, 6 restarts, 602 min. **The
+conclusion held and the evidence got stronger, but the headline range came down to
++26-59% and the peak moved from 84 labels to 72.**
+
+| configs labeled | 36 | 48 | 60 | 72 | 84 |
+|:---|---:|---:|---:|---:|---:|
+| published | +35% | +47% | +55% | +52% | **+62%** |
+| corrected | +26% | +49% | +53% | **+59%** | +50% |
+| restarts AL wins | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+
+Points moved in BOTH directions (-12% at 84, +8% at 72), which is the signature of
+removing noise rather than removing a bias. The old +62% was the maximum over a
+five-point sweep and did not reproduce -- a reminder that quoting the best point of a
+sweep quotes the noise along with the effect.
+
+**The three defects:**
+
+1. **Fine-tuned models silently lost the foundation's element table.** MACE's
+   `--foundation_model_elements` defaults to False, so the table is rebuilt from
+   whatever is in the train file: a bootstrap draw that missed acetonitrile produced
+   a model with no nitrogen, which *raises* on any N-bearing config rather than
+   degrading. Latent here because acetonitrile is a third of the pool, but fatal for
+   any pool with uneven composition. Now asserted after every fine-tune.
+2. **The acquisition score was not rotation-invariant.** `std(axis=0).mean()` is the
+   mean of per-*component* standard deviations, and the mean of |sx|,|sy|,|sz| is
+   frame-dependent; the same configuration scored ~3.5% differently under rigid
+   rotation, silently reordering the acquisition queue. `sqrt(mean(var))` is
+   invariant. An exact invariance violation inside a project about equivariant ML.
+3. **Best-epoch selection ran on 2-3 validation configs.** `--valid_fraction=0.1` on
+   a 24-config train file leaves two or three; observed best epochs across one
+   committee were 50, 28 and 66 -- effectively arbitrary. Replaced by a fixed
+   40-config validation set carved once and shared by every fine-tune in the study.
+   This is also why the corrected run took 602 min against the original 138: forty
+   validation configs evaluated every epoch is not free.
+
+**What improved beyond the numbers.** Both arms share the seed set, bootstrap draws
+and training seeds, so the comparison is paired and the 24-label point is identical
+by construction. AL wins 6/6 paired restarts at every budget (one-sided sign test,
+p = 0.016 at each point) -- a far stronger claim than a mean with a standard-error
+band over two restarts. The effect also reaches the median for the first time (+17%,
++21%, +21% at the top three budgets), where it previously lived almost entirely in
+the tail.
+
+**Lesson for the robust-number list above:** a result can be real and its number
+still wrong. Two of these three bugs changed which configurations got selected, and
+none announced itself -- the loop ran, the traces looked plausible, and the
+conclusion was correct the whole time. Re-running after a fix is not housekeeping; it
+is the only way to learn which part of the number was the effect.
 
 ## Explicitly out of scope on this hardware
 

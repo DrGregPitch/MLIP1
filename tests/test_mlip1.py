@@ -122,3 +122,50 @@ def test_mace_oracle_available_only_with_extra():
     e = oracle.energy(molecule("H2O"))
     assert np.isfinite(e)
     assert oracle.n_calls == 1
+
+
+# --------------------------------------------------------------------------
+# acquisition score invariance (pure numpy; no MACE, no network)
+# --------------------------------------------------------------------------
+
+def _rand_rotation(rng):
+    """A uniformly random proper rotation via QR."""
+    q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+    q = q @ np.diag(np.sign(np.diag(r)))
+    return q if np.linalg.det(q) > 0 else q @ np.diag([1.0, 1.0, -1.0])
+
+
+def test_committee_disagreement_is_rotation_invariant():
+    """The AL acquisition score must not depend on the coordinate frame.
+
+    Forces are vectors, so rotating a configuration rotates every member's
+    prediction. The mean of per-component standard deviations (mean of |sx|,|sy|,|sz|)
+    is NOT invariant under that rotation and silently reorders the acquisition
+    queue; sqrt(mean(var)) is, because the per-atom variance sums as a trace.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from run_real_al import committee_disagreement  # noqa: E402
+
+    rng = np.random.default_rng(0)
+    forces = [[rng.normal(size=(9, 3))] for _ in range(3)]      # 3 members, 1 config
+    base = committee_disagreement(forces, 1)[0]
+
+    for _ in range(8):
+        R = _rand_rotation(rng)
+        rotated = [[m[0] @ R.T] for m in forces]
+        assert np.isclose(committee_disagreement(rotated, 1)[0], base, rtol=1e-10)
+
+
+def test_committee_disagreement_scales_with_spread():
+    """Sanity: a wider committee spread must score higher."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from run_real_al import committee_disagreement  # noqa: E402
+
+    rng = np.random.default_rng(1)
+    tight = [[rng.normal(scale=0.01, size=(9, 3))] for _ in range(3)]
+    wide = [[rng.normal(scale=1.00, size=(9, 3))] for _ in range(3)]
+    assert committee_disagreement(wide, 1)[0] > committee_disagreement(tight, 1)[0]
