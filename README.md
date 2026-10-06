@@ -29,7 +29,7 @@ Student and reference share no architecture, no training data and no inductive b
 the student is MACE fine-tuned from MACE-OFF, the labels come from Kohn–Sham DFT.
 Committee disagreement tracks force error at **Spearman 0.86**.
 
-## A universal MLIP cannot police its own training data
+## The oracle saturated, and that quietly broke the filter
 
 An earlier version of this experiment used MACE-OFF *large* as a stand-in oracle —
 standard practice for a methods demonstration, since real DFT across a pool × 6
@@ -52,9 +52,19 @@ never once fired, and near-dissociated geometries passed straight through. Half 
 held-out test set carried a bond under 0.9 Å. Against real DFT the same filter
 removes 42 configurations, 7.8% of the pool.
 
-The lesson generalises past this repository: a universal MLIP is the wrong instrument
-for deciding which configurations are too distorted to train on, because the regime
-where it fails is exactly the regime where it stops reporting that it is failing.
+Why it flattens is architectural, and it tells you what to check. **MACE-OFF23 has no
+short-range repulsive term** — verified on both checkpoints, no `ZBLBasis` in either —
+so nothing forces the energy to diverge as atoms approach; it is a smooth regressor
+extrapolating off its training manifold, and it reverts to something bounded while the
+real interaction climbs. The error is therefore *signed*: it under-predicts exactly
+where the forces are largest, which is the direction that defeats a force threshold.
+
+The lesson is narrower than "don't trust an MLIP", and more useful: **before filtering
+geometries with a potential, check whether it has an explicit short-range repulsion
+term.** MACE-OFF23 does not. MACE-MP ships a ZBL core precisely for this, and would
+not fail the same way — which is worth knowing, since it is also the model this README
+recommends for permissive use. Measured here on one model family; the mechanism should
+apply to any potential without a repulsive core, but that is reasoning, not data.
 
 ## The point most people miss
 
@@ -70,13 +80,20 @@ Get any one wrong and random ties or wins. Diagnosing *which* is the actual skil
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python scripts/build_ft_pool.py        # generate + reference-label the pool, OOD split
-.venv/bin/python scripts/run_real_al.py --outdir results --members 3 --epochs 80 --restarts 6
+.venv/bin/pip install pyscf                      # the DFT reference
+.venv/bin/python scripts/build_ft_pool.py        # generate the configuration pool
+.venv/bin/python scripts/build_dft_pool.py       # relabel at PBE0/def2-SVP, rebuild the OOD split (~36 min)
+.venv/bin/python scripts/run_real_al.py --pool data_cache/dft_pool.xyz \
+    --test data_cache/dft_heldout.xyz --e0s average --outdir results_dft --restarts 6
 ```
 
-MACE runs in float64, which on a Mac means CPU (PyTorch's Metal/MPS backend has no float64 — one concrete reason production atomistics is CUDA-native). A full 6-restart run is a few hours on CPU; each committee fine-tune is ~2 minutes.
+Drop the `build_dft_pool.py` step and the `--pool/--test/--e0s` flags to run the
+original MACE-oracle variant instead.
 
-- `scripts/build_ft_pool.py` — configuration pool + reference labels, with the OOD test split
+MACE runs in float64, which on a Mac means CPU (PyTorch's Metal/MPS backend has no float64 — one concrete reason production atomistics is CUDA-native). A full 6-restart run is ~12 h on CPU (703 min for the DFT run), plus 36 min to label the pool.
+
+- `scripts/build_ft_pool.py` — configuration pool, MACE-oracle labels, OOD test split
+- `scripts/build_dft_pool.py` — relabels that pool at PBE0/def2-SVP and reapplies the force filter
 - `scripts/run_real_al.py` — the committee active-learning loop (real MACE fine-tuning)
 - `scripts/validate_finetune.py` — confirms fine-tuning reduces held-out force error
 - `scripts/probe_committee.py` — the precondition check (disagreement vs. error)
@@ -87,7 +104,7 @@ MACE runs in float64, which on a Mac means CPU (PyTorch's Metal/MPS backend has 
 The code in this repository is **MIT** (see `LICENSE`). Two honest notes about what it runs on:
 
 - **Scope of the DFT.** Reference labels are PBE0/def2-SVP on 6–9-atom organic molecules — a hybrid functional at a double-zeta basis, adequate for forces on this system and cheap enough to run the whole pool, but not a converged benchmark. The fine-tune is therefore a level-of-theory transfer: MACE-OFF is trained at ωB97M-D3(BJ)/def2-TZVPPD, so the student is being moved onto a different reference surface (run with `--e0s average`, which refits the atomic baselines). `scripts/build_ft_pool.py` is kept for the MACE-oracle variant; `scripts/build_dft_pool.py` is the DFT path.
-- **The default model weights (MACE-OFF) are non-commercial** (Academic Software License). For a fully permissive, and more materials-relevant, setup, swap to **MACE-MP** (`mace_mp`, Materials-Project-trained, permissive) on inorganic structures — the code and every finding transfer directly. That swap is the recommended path for any commercial or fully-open use.
+- **The default model weights (MACE-OFF) are non-commercial** (Academic Software License). For a fully permissive, and more materials-relevant, setup, swap to **MACE-MP** (`mace_mp`, Materials-Project-trained, permissive) on inorganic structures — the code transfers directly, and the active-learning result should too. The saturation finding above specifically would not: MACE-MP ships a ZBL short-range repulsion term, so it is built to diverge where MACE-OFF flattens. That swap is the recommended path for any commercial or fully-open use.
 
 ## What this demonstrates
 
