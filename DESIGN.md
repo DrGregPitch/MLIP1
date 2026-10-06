@@ -1,6 +1,6 @@
 # Project 4 — MLIPs, GPU atomistics, ALCHEMI
 
-**Status: local only. Not on GitHub, not on the resume yet.**
+**Status: public at github.com/DrGregPitch/MLIP1.**
 
 The target role's core is **NVIDIA ALCHEMI**: MLIP-accelerated atomistic simulation
 (geometry relaxation, conformer search, MD, TS search), **MLIP active learning for
@@ -45,7 +45,9 @@ brief lays out.
 The reference labels an MLIP fine-tunes against come from DFT. GPU-accelerated DFT is
 where that's generated at scale: **GPU4PySCF, TeraChem, QUICK**, and GPU builds of
 **VASP/CP2K**. Locally I can't run these, but the fine-tuning loop is written so the
-"oracle" is pluggable — a cheap analytic reference now, a GPU-DFT call in production.
+"oracle" is pluggable. It now runs against real DFT locally (PBE0/def2-SVP via PySCF,
+36 min for the whole pool — these molecules are 6–9 atoms); at production scale the
+same slot takes a GPU-DFT call.
 
 ## Talking points this earns (honestly)
 
@@ -137,55 +139,74 @@ swapped for a real GPU-DFT oracle. The loop structure is production-identical.
 
 ## CORRECTION (measured): three defects in the run above; result survives, numbers move
 
-The +35-62% above was produced by code carrying three bugs. All three are fixed and
-the experiment was re-run from scratch on the same pool, 6 restarts, 602 min. **The
-conclusion held and the evidence got stronger, but the headline range came down to
-+26-59% and the peak moved from 84 labels to 72.**
+The +35-62% above was produced by code carrying three bugs (element-table loss, a
+rotation-dependent acquisition score, best-epoch selection on 2-3 validation configs).
+All fixed; re-running the same pool over 6 restarts gave +26-59%, with AL winning 6/6
+paired restarts at every budget (one-sided sign test, p = 0.016 each) and the effect
+reaching the median for the first time. Points moved in BOTH directions (-12% at 84
+labels, +8% at 72) -- the signature of removing noise, not bias. The old +62% was the
+maximum over a five-point sweep and did not reproduce; quoting the best point of a
+sweep quotes the noise along with the effect. Details in the next section.
+
+## RESULT (real DFT): the effect is not an artefact of the proxy oracle
+
+Everything above used MACE-OFF *large* as the reference. The open question was whether
+the active-learning advantage was partly an artefact of student and oracle sharing an
+architecture family and a training distribution -- a same-family teacher is a target
+the student is unusually well suited to reproduce, which would inflate the measured
+gap. The honest expectation was that the advantage would shrink against real DFT.
+
+It did not. 536 configurations relabelled at **PBE0/def2-SVP** (PySCF), 536/536 SCF
+converged, 36 min; the same pool, the same loop, 6 paired restarts, 703 min.
 
 | configs labeled | 36 | 48 | 60 | 72 | 84 |
 |:---|---:|---:|---:|---:|---:|
-| published | +35% | +47% | +55% | +52% | **+62%** |
-| corrected | +26% | +49% | +53% | **+59%** | +50% |
-| restarts AL wins | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| MACE-large oracle | +26% | +49% | +53% | +59% | +50% |
+| **PBE0/def2-SVP**  | **+24%** | **+45%** | **+45%** | **+55%** | **+50%** |
+| restarts AL wins (DFT) | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
 
-Points moved in BOTH directions (-12% at 84, +8% at 72), which is the signature of
-removing noise rather than removing a bias. The old +62% was the maximum over a
-five-point sweep and did not reproduce -- a reminder that quoting the best point of a
-sweep quotes the noise along with the effect.
+Within noise of each other. The correlated-oracle critique was real and worth closing,
+and closing it cost 36 minutes of DFT -- but it was not where the problem was.
 
-**The three defects:**
+### The actual find: the oracle saturates, so the filter never fired
 
-1. **Fine-tuned models silently lost the foundation's element table.** MACE's
-   `--foundation_model_elements` defaults to False, so the table is rebuilt from
-   whatever is in the train file: a bootstrap draw that missed acetonitrile produced
-   a model with no nitrogen, which *raises* on any N-bearing config rather than
-   degrading. Latent here because acetonitrile is a third of the pool, but fatal for
-   any pool with uneven composition. Now asserted after every fine-tune.
-2. **The acquisition score was not rotation-invariant.** `std(axis=0).mean()` is the
-   mean of per-*component* standard deviations, and the mean of |sx|,|sy|,|sz| is
-   frame-dependent; the same configuration scored ~3.5% differently under rigid
-   rotation, silently reordering the acquisition queue. `sqrt(mean(var))` is
-   invariant. An exact invariance violation inside a project about equivariant ML.
-3. **Best-epoch selection ran on 2-3 validation configs.** `--valid_fraction=0.1` on
-   a 24-config train file leaves two or three; observed best epochs across one
-   committee were 50, 28 and 66 -- effectively arbitrary. Replaced by a fixed
-   40-config validation set carved once and shared by every fine-tune in the study.
-   This is also why the corrected run took 602 min against the original 138: forty
-   validation configs evaluated every epoch is not free.
+Real DFT on the same geometries disagreed with the MACE labels in a structured way.
+On the worst configurations DFT reaches 40-80 eV/A where the MACE label reports
+10-23. MACE-OFF is trained on SPICE (near-equilibrium MD, 300-500 K); a 0.66 A bond is
+40% compressed, far outside anything it has seen, and rather than extrapolate up the
+repulsive wall it flattens.
 
-**What improved beyond the numbers.** Both arms share the seed set, bootstrap draws
-and training seeds, so the comparison is paired and the 24-label point is identical
-by construction. AL wins 6/6 paired restarts at every budget (one-sided sign test,
-p = 0.016 at each point) -- a far stronger claim than a mean with a standard-error
-band over two restarts. The effect also reaches the median for the first time (+17%,
-+21%, +21% at the top three budgets), where it previously lived almost entirely in
-the tail.
+`build_ft_pool.py` filters unphysical configurations at `|F|max >= 40 eV/A`, computed
+from that label. The highest label anywhere in the 536-config pool was **27.2 eV/A**:
+the filter had **never once fired**. Near-dissociated geometries passed straight
+through and concentrated in the hard tail, so half the held-out test set carried a
+bond under 0.9 A and 10% carried one under 0.7 A. Against DFT the same filter removes
+42 configurations (7.8%), and the test set's shortest bond goes 0.64 -> 0.71 A.
 
-**Lesson for the robust-number list above:** a result can be real and its number
-still wrong. Two of these three bugs changed which configurations got selected, and
-none announced itself -- the loop ran, the traces looked plausible, and the
-conclusion was correct the whole time. Re-running after a fix is not housekeeping; it
-is the only way to learn which part of the number was the effect.
+Two consequences. The README's claim that the test regime is "what a real MD run
+visits" was wrong -- a real trajectory does not visit 0.66 A bonds. And some of the
+old absolute p90 (2000-5000 meV/A, against 1088-1723 now) was the student failing to
+reproduce a saturation artefact on geometries that should never have been in the set.
+The AL-vs-random comparison was never invalid, since both arms saw identical labels.
+
+The generalisable lesson, and the reason this is in the notebook rather than buried:
+**a universal MLIP is the wrong instrument for policing its own training data.** The
+regime where it fails is exactly the regime where it stops reporting that it fails, so
+a filter built on its predictions is blind precisely where it needs to see. Measure
+the filter against something the model cannot flatter.
+
+### Also fixed, for the record
+
+Three ordinary defects were found and fixed before these runs: fine-tuned models were
+rebuilding the element table from their train file (`--foundation_model_elements`
+defaults to False), so a bootstrap draw missing a molecule produced a model that
+raises on it rather than degrading; the acquisition score averaged per-component
+standard deviations and so was not rotation-invariant (~3.5% under rigid rotation,
+silently reordering the queue); and best-epoch selection ran on the 2-3 validation
+configurations left by `--valid_fraction=0.1` on a 24-config train file, replaced by a
+fixed 40-config validation set shared across the study. Re-running moved individual
+points in both directions, which is what removing noise looks like rather than
+removing bias.
 
 ## Explicitly out of scope on this hardware
 
