@@ -189,11 +189,19 @@ old absolute p90 (2000-5000 meV/A, against 1088-1723 now) was the student failin
 reproduce a saturation artefact on geometries that should never have been in the set.
 The AL-vs-random comparison was never invalid, since both arms saw identical labels.
 
-The generalisable lesson, and the reason this is in the notebook rather than buried:
-**a universal MLIP is the wrong instrument for policing its own training data.** The
-regime where it fails is exactly the regime where it stops reporting that it fails, so
-a filter built on its predictions is blind precisely where it needs to see. Measure
-the filter against something the model cannot flatter.
+The mechanism, checked rather than asserted: **MACE-OFF23 carries no ZBL pair-repulsion
+term** (confirmed on both the small and large checkpoints). Nothing in the architecture
+forces divergence at short range, so the model is a smooth regressor extrapolating off
+its manifold and reverts to a bounded value while the true interaction climbs. The
+error is signed -- it under-predicts hardest exactly where forces are largest -- which
+is what defeats a threshold test specifically, as opposed to merely adding noise to it.
+
+The generalisable claim is therefore narrower than "a universal MLIP cannot police its
+own training data": **check whether the potential has an explicit short-range repulsion
+term before filtering geometries with it.** MACE-MP ships a ZBL core and should not
+fail this way, which matters because it is the permissive alternative this project
+recommends elsewhere. One model family measured here; the argument for why it
+generalises is mechanistic, not empirical.
 
 ### Also fixed, for the record
 
