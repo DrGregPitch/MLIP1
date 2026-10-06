@@ -38,8 +38,9 @@ def finetune(train_atoms, name, workdir, epochs, seed, e0s="foundation", valid_f
 
     e0s: 'foundation' reuses the foundation model's atomic reference energies, which
     is correct only while the labels sit on the foundation model's own energy scale.
-    For labels from a different level of theory (rMD17 ships total PBE/def2-SVP
-    energies) pass 'average' so MACE least-squares-fits its own atomic baselines.
+    For labels from a different level of theory (build_dft_pool.py writes total
+    PBE0/def2-SVP energies) pass 'average' so MACE least-squares-fits its own
+    atomic baselines.
 
     valid_file: a FIXED validation set, shared by every fine-tune in the study.
     Without it MACE carves --valid_fraction=0.1 out of the train file, which is 2-3
