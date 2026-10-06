@@ -2,40 +2,59 @@
 
 **Active-learning fine-tuning of a machine-learning interatomic potential (MLIP) — the loop NVIDIA's ALCHEMI is built on, reproduced faithfully and honestly on a laptop.**
 
-A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this **cuts worst-case force error by 26–59% versus random selection at equal labeling budget, winning every paired restart at every budget.**
+A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this **cuts worst-case force error by 24–55% versus random selection at equal labeling budget, winning every paired restart at every budget. The reference is real DFT.**
 
-![Active learning halves worst-case force error on out-of-distribution configs at equal labeling budget (6 restarts).](assets/mlip1_money_plot_fixed.png)
+![Active learning halves worst-case force error on out-of-distribution configs at equal labeling budget (6 restarts).](assets/mlip1_money_plot_dft.png)
 
 ---
 
 ## The result
 
-On a held-out **out-of-distribution** test set (the hard/deployment regime), a 3-member committee of fine-tuned MACE models, selecting configurations by force disagreement:
+Reference labels are **PBE0/def2-SVP** (PySCF), computed on every configuration in the
+pool. On a held-out **out-of-distribution** test set — the hard/deployment regime — a
+3-member committee of fine-tuned MACE models selecting by force disagreement:
 
 | configs labeled | 36 | 48 | 60 | 72 | 84 |
 |:---|---:|---:|---:|---:|---:|
-| worst-case (p90) force error, AL better than random | +26% | +49% | +53% | **+59%** | +50% |
+| worst-case (p90) force error, AL better than random | +24% | +45% | +45% | **+55%** | +50% |
 | restarts where AL wins | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| median force error, AL better | −6% | +26% | +28% | **+37%** | +21% |
 
 Both arms share the seed set, the bootstrap draws and the training seeds, so the
 comparison is **paired** and the 24-label point is identical by construction. Active
-learning wins every one of the 6 paired restarts at every budget — a one-sided sign
-test gives **p = 0.016** at each point, which is a stronger statement than the mean
-and its band. The effect also now shows in the median (+17%, +21%, +21% at the top
-three budgets), not only the tail.
+learning wins all 6 paired restarts at every budget — a one-sided sign test gives
+**p = 0.016** at each point, which is a stronger statement than a mean and its band.
 
-Alongside: real MACE fine-tuning cut held-out force error **~3×** (1121 → 374 meV/Å,
-median on physical configs, validation split drawn from train — never test);
-committee disagreement tracks force error at **Spearman 0.86**.
+Student and reference share no architecture, no training data and no inductive bias:
+the student is MACE fine-tuned from MACE-OFF, the labels come from Kohn–Sham DFT.
+Committee disagreement tracks force error at **Spearman 0.86**.
 
-> **These numbers superseded an earlier run.** The first version of this experiment
-> reported +35–62%. Three defects were later found and fixed — the fine-tuned models
-> were silently losing the foundation's element table, the acquisition score was not
-> rotation-invariant, and best-epoch selection ran on 2–3 validation configurations.
-> Re-running the corrected code moved individual points in both directions (−12% at
-> 84 labels, +8% at 72) and brought the headline range down to +26–59%. The
-> conclusion held and the evidence improved. [`DESIGN.md`](DESIGN.md) records what
-> changed and why.
+## A universal MLIP cannot police its own training data
+
+An earlier version of this experiment used MACE-OFF *large* as a stand-in oracle —
+standard practice for a methods demonstration, since real DFT across a pool × 6
+restarts × 5 budgets is normally a cluster job. Here the molecules are 6–9 atoms, so
+it is 36 minutes: 536 configurations at PBE0/def2-SVP, 536/536 SCF converged.
+
+Running it changed the headline very little (+26–59% → +24–55%) but exposed something
+worth knowing. **MACE-OFF saturates on distorted geometries.** It is trained on SPICE
+— near-equilibrium MD at 300–500 K — and has never seen a 0.66 Å bond, so instead of
+climbing the repulsive wall it flattens:
+
+| | real DFT | MACE-OFF large label |
+|:---|---:|---:|
+| worst configurations, max \|F\| | **40–80 eV/Å** | 10–23 eV/Å |
+| highest label anywhere in the pool | 39.6 eV/Å | 27.2 eV/Å |
+
+The pool builder filters unphysical configurations at `|F|max >= 40 eV/Å`. Measured
+with the saturating model, **nothing ever reached the threshold** — the filter had
+never once fired, and near-dissociated geometries passed straight through. Half the
+held-out test set carried a bond under 0.9 Å. Against real DFT the same filter
+removes 42 configurations, 7.8% of the pool.
+
+The lesson generalises past this repository: a universal MLIP is the wrong instrument
+for deciding which configurations are too distorted to train on, because the regime
+where it fails is exactly the regime where it stops reporting that it is failing.
 
 ## The point most people miss
 
@@ -65,9 +84,9 @@ MACE runs in float64, which on a Mac means CPU (PyTorch's Metal/MPS backend has 
 
 ## ⚠️ Data & license — read this
 
-The code in this repository is **MIT** (see `LICENSE`). Two honest caveats about what it runs on:
+The code in this repository is **MIT** (see `LICENSE`). Two honest notes about what it runs on:
 
-- **Reference labels come from a model, not DFT.** MACE-OFF *large* stands in for a high-fidelity DFT oracle. This is a faithful *methods* demonstration — the active-learning loop is production-identical — but the numbers are not DFT-validated. In production the reference is a GPU-DFT call; the loop is unchanged.
+- **Scope of the DFT.** Reference labels are PBE0/def2-SVP on 6–9-atom organic molecules — a hybrid functional at a double-zeta basis, adequate for forces on this system and cheap enough to run the whole pool, but not a converged benchmark. The fine-tune is therefore a level-of-theory transfer: MACE-OFF is trained at ωB97M-D3(BJ)/def2-TZVPPD, so the student is being moved onto a different reference surface (run with `--e0s average`, which refits the atomic baselines). `scripts/build_ft_pool.py` is kept for the MACE-oracle variant; `scripts/build_dft_pool.py` is the DFT path.
 - **The default model weights (MACE-OFF) are non-commercial** (Academic Software License). For a fully permissive, and more materials-relevant, setup, swap to **MACE-MP** (`mace_mp`, Materials-Project-trained, permissive) on inorganic structures — the code and every finding transfer directly. That swap is the recommended path for any commercial or fully-open use.
 
 ## What this demonstrates
