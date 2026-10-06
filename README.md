@@ -1,8 +1,8 @@
 # MLIP1
 
-**Active-learning fine-tuning of a machine-learning interatomic potential (MLIP) — the loop NVIDIA's ALCHEMI is built on, reproduced faithfully and honestly on a laptop.**
+**Active-learning fine-tuning of a machine-learning interatomic potential (MLIP) — the loop NVIDIA's ALCHEMI is built on, run on a laptop.**
 
-A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this **cuts worst-case force error by 24–55% versus random selection at equal labeling budget, winning every paired restart at every budget. The reference is real DFT.**
+A committee of fine-tuned [MACE](https://github.com/ACEsuit/mace) foundation models selects which configurations to label with an expensive reference and fine-tune on. On the configurations that matter — the out-of-distribution regime a real molecular-dynamics run visits — this cuts worst-case force error by **24–55%** versus random selection at equal labeling budget, winning every paired restart at every budget. The reference is real DFT.
 
 ![Active learning halves worst-case force error on out-of-distribution configs at equal labeling budget (6 restarts).](assets/mlip1_money_plot_dft.png)
 
@@ -22,22 +22,22 @@ pool. On a held-out **out-of-distribution** test set — the hard/deployment reg
 
 Both arms share the seed set, the bootstrap draws and the training seeds, so the
 comparison is **paired** and the 24-label point is identical by construction. Active
-learning wins all 6 paired restarts at every budget — a one-sided sign test gives
-**p = 0.016** at each point, which is a stronger statement than a mean and its band.
+learning wins all 6 paired restarts at every budget; a one-sided sign test gives
+p = 0.016 at each point.
 
 Student and reference share no architecture, no training data and no inductive bias:
 the student is MACE fine-tuned from MACE-OFF, the labels come from Kohn–Sham DFT.
 Committee disagreement tracks force error at **Spearman 0.86**.
 
-## The oracle saturated, and that quietly broke the filter
+## Relabelling with DFT, and what the force filter was missing
 
 An earlier version of this experiment used MACE-OFF *large* as a stand-in oracle —
 standard practice for a methods demonstration, since real DFT across a pool × 6
 restarts × 5 budgets is normally a cluster job. Here the molecules are 6–9 atoms, so
 it is 36 minutes: 536 configurations at PBE0/def2-SVP, 536/536 SCF converged.
 
-Running it changed the headline very little (+26–59% → +24–55%) but exposed something
-worth knowing. **MACE-OFF saturates on distorted geometries.** It is trained on SPICE
+Running it changed the headline very little (+26–59% → +24–55%). It also showed that
+MACE-OFF saturates on distorted geometries: it is trained on SPICE
 — near-equilibrium MD at 300–500 K — and has never seen a 0.66 Å bond, so instead of
 climbing the repulsive wall it flattens:
 
@@ -52,29 +52,28 @@ never once fired, and near-dissociated geometries passed straight through. Half 
 held-out test set carried a bond under 0.9 Å. Against real DFT the same filter
 removes 42 configurations, 7.8% of the pool.
 
-Why it flattens is architectural, and it tells you what to check. **MACE-OFF23 has no
-short-range repulsive term** — verified on both checkpoints, no `ZBLBasis` in either —
+The reason is architectural. MACE-OFF23 has no
+short-range repulsive term — verified on both checkpoints, no `ZBLBasis` in either —
 so nothing forces the energy to diverge as atoms approach; it is a smooth regressor
 extrapolating off its training manifold, and it reverts to something bounded while the
 real interaction climbs. The error is therefore *signed*: it under-predicts exactly
 where the forces are largest, which is the direction that defeats a force threshold.
 
-The lesson is narrower than "don't trust an MLIP", and more useful: **before filtering
-geometries with a potential, check whether it has an explicit short-range repulsion
-term.** MACE-OFF23 does not. MACE-MP ships a ZBL core precisely for this, and would
-not fail the same way — which is worth knowing, since it is also the model this README
-recommends for permissive use. Measured here on one model family; the mechanism should
-apply to any potential without a repulsive core, but that is reasoning, not data.
+So the practical check is whether the potential has an explicit short-range repulsion
+term before it is used to filter geometries. MACE-OFF23 does not; MACE-MP ships a ZBL
+core and should not fail the same way, which matters because it is the model this
+README recommends for permissive use. Measured on one model family — the argument that
+it generalises to any potential without a repulsive core is mechanistic, not data.
 
-## The point most people miss
+## Three conditions active learning needs
 
-Getting active learning to beat random took getting **three conditions** right — and each was found by a real null result, not assumed:
+Three conditions had to hold before active learning beat random. Each was established by a null result rather than assumed:
 
 1. **Reducible uncertainty** — the model being fine-tuned must be high-capacity (the *real* MACE), so its uncertainty reflects missing *data*, not missing representational capacity. A lightweight surrogate gave disagreement-vs-error correlation 0.38 and lost to random; the real MACE committee gives 0.86 and wins.
 2. **Distribution shift** — evaluate on the deployment/OOD regime. On an i.i.d. test, random selection is near-optimal *by construction*, and active learning ties or loses.
 3. **The right objective** — worst-case reliability (a single large force error crashes an MD run), not average error, which is dominated by the easy bulk that random samples well.
 
-Get any one wrong and random ties or wins. Diagnosing *which* is the actual skill — see [`DESIGN.md`](DESIGN.md) for the full path through the dead ends to the working method.
+With any one of them wrong, random ties or wins. [`DESIGN.md`](DESIGN.md) records the path, including the approaches that did not work.
 
 ## Run it
 
@@ -97,18 +96,18 @@ MACE runs in float64, which on a Mac means CPU (PyTorch's Metal/MPS backend has 
 - `scripts/run_real_al.py` — the committee active-learning loop (real MACE fine-tuning)
 - `scripts/validate_finetune.py` — confirms fine-tuning reduces held-out force error
 - `scripts/probe_committee.py` — the precondition check (disagreement vs. error)
-- `probe_signal.py`, `probe_tail.py`, `scripts/run_al.py` — the documented **dead ends** (surrogate approach, wrong pools), kept because the path is the point
+- `probe_signal.py`, `probe_tail.py`, `scripts/run_al.py` — the dead ends (surrogate approach, wrong pools), kept for the record
 
-## ⚠️ Data & license — read this
+## Data & license
 
-The code in this repository is **MIT** (see `LICENSE`). Two honest notes about what it runs on:
+The code in this repository is MIT (see `LICENSE`). Two notes on what it runs on:
 
 - **Scope of the DFT.** Reference labels are PBE0/def2-SVP on 6–9-atom organic molecules — a hybrid functional at a double-zeta basis, adequate for forces on this system and cheap enough to run the whole pool, but not a converged benchmark. The fine-tune is therefore a level-of-theory transfer: MACE-OFF is trained at ωB97M-D3(BJ)/def2-TZVPPD, so the student is being moved onto a different reference surface (run with `--e0s average`, which refits the atomic baselines). `scripts/build_ft_pool.py` is kept for the MACE-oracle variant; `scripts/build_dft_pool.py` is the DFT path.
 - **The default model weights (MACE-OFF) are non-commercial** (Academic Software License). For a fully permissive, and more materials-relevant, setup, swap to **MACE-MP** (`mace_mp`, Materials-Project-trained, permissive) on inorganic structures — the code transfers directly, and the active-learning result should too. The saturation finding above specifically would not: MACE-MP ships a ZBL short-range repulsion term, so it is built to diverge where MACE-OFF flattens. That swap is the recommended path for any commercial or fully-open use.
 
 ## What this demonstrates
 
-MLIP · foundation models for atomistic simulation (MACE) · fine-tuning a foundation potential · committee-uncertainty active learning · when active learning helps and when it doesn't · robust-number discipline (every too-good result here was an artifact, caught and discarded).
+MLIP · foundation models for atomistic simulation (MACE) · fine-tuning a foundation potential · committee-uncertainty active learning · when active learning helps and when it doesn't.
 
 ## License
 
